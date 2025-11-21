@@ -145,3 +145,43 @@ def _clean_one_wave(raw_nlsy: pd.DataFrame, year: int, bpi_info: pd.DataFrame) -
     out = out.set_index(["childid", "year"])
 
     return out
+
+
+# =====================================================================
+# TASK 5: MANAGE ALL WAVES
+# =====================================================================
+
+def manage_nlsy_data(raw_nlsy: pd.DataFrame, bpi_info: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean all NLSY BPI waves (1986–2010 even years) and return long dataset.
+    """
+    waves = []
+    for year in range(1986, 2012, 2):
+        wave_df = _clean_one_wave(raw_nlsy, year, bpi_info)
+        waves.append(wave_df)
+
+    df_long = pd.concat(waves).sort_index()
+    return df_long
+
+
+# =====================================================================
+# MAIN EXECUTION
+# =====================================================================
+
+if __name__ == "__main__":
+    project_root = Path(__file__).resolve().parents[1]
+    bld_dir = project_root / "bld"
+
+    # Load data extracted by unzip.py
+    nlsy_path = bld_dir / "BEHAVIOR_PROBLEMS_INDEX.dta"
+    info_path = bld_dir / "bpi_variable_info.csv"
+
+    raw_nlsy = pd.read_stata(nlsy_path)
+    bpi_info = pd.read_csv(info_path)
+
+    clean_nlsy = manage_nlsy_data(raw_nlsy, bpi_info)
+
+    out_path = bld_dir / "nlsy_clean.parquet"
+    clean_nlsy.to_parquet(out_path)
+
+    print("NLSY cleaning complete.")
