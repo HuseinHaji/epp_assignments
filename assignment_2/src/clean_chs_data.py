@@ -31,15 +31,11 @@ def clean_chs_data(raw: pd.DataFrame) -> pd.DataFrame:
     for raw_name, clean_name in bpi_map.items():
         df[clean_name] = _to_pandas_missing(df[raw_name])
 
-    # Clean momid if needed (dtype)
-    df["momid"] = df["momid"].astype("Int64")
+    df["momid"] = pd.to_numeric(df["momid"], errors="coerce").astype("Int64")
+    df["age"] = pd.to_numeric(df["age"], errors="coerce").astype("Int64")
+    df["childid"] = pd.to_numeric(df["childid"], errors="coerce").astype("Int64")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
 
-    # Age can be integer (two-year bins)
-    df["age"] = df["age"].astype("Int64")
-
-    # Set index
-    df["childid"] = df["childid"].astype("Int64")
-    df["year"] = df["year"].astype("Int64")
     df = df.set_index(["childid", "year"])
 
     # Keep only relevant columns (plus momid and age)

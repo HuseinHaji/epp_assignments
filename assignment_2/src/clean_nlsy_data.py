@@ -133,13 +133,15 @@ def _clean_one_wave(raw_nlsy: pd.DataFrame, year: int, bpi_info: pd.DataFrame) -
     if "childid" not in df.columns:
         raise ValueError("childid missing (check bpi_variable_info.csv).")
 
-    df["childid"] = df["childid"].astype("Int64")
-    df["year"] = df["year"].astype("Int64")
+    df["childid"] = pd.to_numeric(df["childid"], errors="coerce").astype("Int64")
+    df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
 
     if "momid" in df.columns:
-        df["momid"] = df["momid"].astype("Int64")
+        df["momid"] = pd.to_numeric(df["momid"], errors="coerce").astype("Int64")
+
     if "birth_order" in df.columns:
-        df["birth_order"] = df["birth_order"].astype("Int64")
+        df["birth_order"] = pd.to_numeric(df["birth_order"], errors="coerce").astype("Int64")
+
 
     out = df.join(df_scores)
     out = out.set_index(["childid", "year"])
