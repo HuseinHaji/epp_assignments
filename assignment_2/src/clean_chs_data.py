@@ -7,10 +7,9 @@ pd.options.mode.copy_on_write = True
 
 def _to_pandas_missing(s: pd.Series) -> pd.Series:
     """
-    Replace Stata-style special missing values with pandas missing.
+    Replace numeric missing codes (e.g. -7) with pandas NA.
     """
-    # Example: negative values or 99 etc. Adapt once you inspect your data.
-    return s.where(~(s < 0), other=pd.NA)
+    return s.replace(-7, pd.NA)
 
 
 def clean_chs_data(raw: pd.DataFrame) -> pd.DataFrame:

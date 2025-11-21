@@ -5,31 +5,42 @@ import numpy as np
 pd.options.mode.copy_on_write = True
 
 
+# =====================================================================
+# HELPER FUNCTIONS
+# =====================================================================
+
 def _to_pandas_missing(s: pd.Series) -> pd.Series:
     """
-    Convert NLSY-style missing codes to pandas missing.
+    Replace numeric missing codes (e.g. -7) with pandas NA.
     """
-    # Example: negative values are missings. Adjust to your data!
-    return s.where(~(s < 0), other=pd.NA)
+    return s.replace(-7, pd.NA)
 
 
 def _harmonize_bpi_category(s: pd.Series) -> pd.Series:
     """
-    Convert BPI answers to an ordered categorical: not true < sometimes true < often true.
+    Convert BPI answers to an ordered categorical:
+    not true < sometimes true < often true.
+    Works with strings like 'NOT TRUE', 'SOMETIMES TRUE', 'OFTEN TRUE'.
     """
-    # Depending on the raw values (codes or strings), you adapt this mapping:
-    mapping = {
-        0: "not true",
-        1: "sometimes true",
-        2: "often true",
-        "NOT TRUE": "not true",
-        "SOMETIMES TRUE": "sometimes true",
-        "OFTEN TRUE": "often true",
-    }
+    s = _to_pandas_missing(s)
 
-    s = s.map(mapping).astype("string")
+    def _normalize_value(v):
+        if pd.isna(v):
+            return pd.NA
+        v = str(v).strip().upper()
+        if v == "NOT TRUE":
+            return "not true"
+        if v == "SOMETIMES TRUE":
+            return "sometimes true"
+        if v == "OFTEN TRUE":
+            return "often true"
+        return pd.NA
+
+    s = s.map(_normalize_value)
+
     cat_type = pd.CategoricalDtype(
-        categories=["not true", "sometimes true", "often true"], ordered=True
+        categories=["not true", "sometimes true", "often true"],
+        ordered=True,
     )
     return s.astype(cat_type)
 
@@ -37,6 +48,8 @@ def _harmonize_bpi_category(s: pd.Series) -> pd.Series:
 def _categorical_to_binary(s: pd.Series) -> pd.Series:
     """
     Map ordered BPI categories to 0/1 for scoring.
+    not true -> 0
+    sometimes true / often true -> 1
     """
     mapping = {
         "not true": 0.0,
@@ -46,68 +59,89 @@ def _categorical_to_binary(s: pd.Series) -> pd.Series:
     return s.map(mapping)
 
 
-def _clean_one_wave(
-    raw_nlsy: pd.DataFrame, year: int, bpi_info: pd.DataFrame
-) -> pd.DataFrame:
+def _get_subscale(readable_name: str) -> str:
     """
-    Clean the NLSY BPI data for a single wave (year) and return a DataFrame
+    Infer subscale name from readable_name prefix.
+    Example: 'anxiety_mood' -> 'anxiety'.
+    """
+    return readable_name.split("_", 1)[0]
+
+
+# =====================================================================
+# MAIN FUNCTION FOR A SINGLE WAVE
+# =====================================================================
+
+def _clean_one_wave(raw_nlsy: pd.DataFrame, year: int, bpi_info: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean the NLSY BPI data for a single survey year and return a DataFrame
     indexed by (childid, year).
+
+    bpi_variable_info.csv must contain:
+    - nlsy_name: raw variable name
+    - readable_name: cleaned final name
+    - survey_year: year or 'invariant'
     """
-    # Filter metadata for this wave
-    info_year = bpi_info.query("year == @year").copy()
-
-    # Suppose bpi_info has columns: raw_name, clean_name, subscale
-    # You must check the actual CSV columns!
-    raw_names = info_year["raw_name"].tolist()
-    clean_names = info_year["clean_name"].tolist()
-    subscales = info_year["subscale"].tolist()
-
     df = raw_nlsy.copy()
 
-    # Ensure year column exists in this wide NLSY dataset or create it if needed
+    # --- 1. Split metadata ---
+    id_rows = bpi_info[bpi_info["survey_year"] == "invariant"].copy()
+    year_rows = bpi_info[bpi_info["survey_year"].astype(str) == str(year)].copy()
+
+    id_raw = id_rows["nlsy_name"].tolist()
+    id_clean = id_rows["readable_name"].tolist()
+
+    item_raw = year_rows["nlsy_name"].tolist()
+    item_clean = year_rows["readable_name"].tolist()
+
+    # --- 2. Add year column ---
     df["year"] = year
 
-    # Keep ID variables + BPI items
-    id_cols = ["childid", "momid", "year"]  # adjust to actual columns
-    df = df[id_cols + raw_names]
+    # --- 3. Subset to necessary columns ---
+    cols_needed = id_raw + item_raw
+    cols_needed = [c for c in cols_needed if c in df.columns]
+    df = df[cols_needed + ["year"]]
 
-    # Clean each item variable
+    # --- 4. Rename columns ---
+    rename_map = dict(zip(id_raw, id_clean)) | dict(zip(item_raw, item_clean))
+    df = df.rename(columns=rename_map)
+
+    # --- 5. Clean BPI items ---
     item_cols_cat = []
-    for raw_name, clean_name in zip(raw_names, clean_names):
-        s = df[raw_name]
-        s = _to_pandas_missing(s)
-        s = _harmonize_bpi_category(s)
-        df[clean_name] = s
-        item_cols_cat.append(clean_name)
+    for col in item_clean:
+        if col not in df.columns:
+            continue
+        df[col] = _harmonize_bpi_category(df[col])
+        item_cols_cat.append(col)
 
-    # Compute numeric version for scoring
+    # --- 6. Numeric scoring (0/1) ---
     df_num = pd.DataFrame(index=df.index)
     for col in item_cols_cat:
         df_num[col] = _categorical_to_binary(df[col])
 
-    # Compute subscale scores by averaging
+    # --- 7. Build subscale scores ---
     df_scores = pd.DataFrame(index=df.index)
-    info_year = info_year.set_index("clean_name")
-    for clean_name in item_cols_cat:
-        subscale = info_year.loc[clean_name, "subscale"]  # e.g. "antisocial"
-        score_col = f"bpi_{subscale}"
-        if score_col not in df_scores:
-            df_scores[score_col] = df_num[clean_name]
-        else:
-            df_scores[score_col] = df_scores[score_col].add(df_num[clean_name], fill_value=0)
+    item_to_subscale = {col: _get_subscale(col) for col in item_cols_cat}
+    subscales = sorted(set(item_to_subscale.values()))
 
-    # Divide each subscale by number of items
-    for subscale in info_year["subscale"].unique():
-        score_col = f"bpi_{subscale}"
-        n_items = (info_year["subscale"] == subscale).sum()
-        df_scores[score_col] = df_scores[score_col] / n_items
+    for subscale in subscales:
+        sub_items = [c for c, sc in item_to_subscale.items() if sc == subscale]
+        if not sub_items:
+            continue
+        df_scores[f"bpi_{subscale}"] = df_num[sub_items].mean(axis=1)
 
-    # Combine ID + categorical item vars + scores
-    out = df[id_cols + item_cols_cat].join(df_scores)
+    # --- 8. Correct dtypes + index ---
+    if "childid" not in df.columns:
+        raise ValueError("childid missing (check bpi_variable_info.csv).")
 
-    # Set index to (childid, year)
-    out["childid"] = out["childid"].astype("Int64")
-    out["year"] = out["year"].astype("Int64")
+    df["childid"] = df["childid"].astype("Int64")
+    df["year"] = df["year"].astype("Int64")
+
+    if "momid" in df.columns:
+        df["momid"] = df["momid"].astype("Int64")
+    if "birth_order" in df.columns:
+        df["birth_order"] = df["birth_order"].astype("Int64")
+
+    out = df.join(df_scores)
     out = out.set_index(["childid", "year"])
 
     return out
