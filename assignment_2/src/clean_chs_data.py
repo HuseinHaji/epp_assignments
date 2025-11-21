@@ -54,7 +54,7 @@ if __name__ == "__main__":
     project_root = Path(__file__).resolve().parents[1]
     bld_dir = project_root / "bld"
 
-    chs_path = bld_dir / "BEHAVIOR_PROBLEMS_INDEX" / "chs_data.dta"
+    chs_path = bld_dir / "chs_data.dta"
     raw_chs = pd.read_stata(chs_path)
     clean_chs = clean_chs_data(raw_chs)
 
